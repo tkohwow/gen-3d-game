@@ -3,6 +3,7 @@ import "./styles.css";
 
 const canvas = document.querySelector("#game");
 const sparkCountEl = document.querySelector("#sparkCount");
+const chainValueEl = document.querySelector("#chainValue");
 const timeLeftEl = document.querySelector("#timeLeft");
 const phaseNameEl = document.querySelector("#phaseName");
 const coherenceBarEl = document.querySelector("#coherenceBar");
@@ -17,6 +18,7 @@ const rankValue = document.querySelector("#rankValue");
 const bestValue = document.querySelector("#bestValue");
 const startButton = document.querySelector("#startButton");
 const retryButton = document.querySelector("#retryButton");
+let audioContext = null;
 
 const phaseNames = ["2D Seed", "3D Lift", "Reality Emitter", "Final Work"];
 const milestones = [
@@ -28,12 +30,21 @@ const milestones = [
 const RUN_SECONDS = 60;
 const FINISH_SCORE = milestones[milestones.length - 1].threshold;
 const BEST_STORAGE_KEY = "gen-particle-best-run-v2";
+const COMBO_DECAY_SECONDS = 2.4;
+const MAX_COMBO = 24;
 const rankWeight = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 };
+const modeRules = {
+  gather: { radius: 2.2, strength: 10.8, capture: 0.56, gain: 1, chain: 1 },
+  orbit: { radius: 1.68, strength: 8.6, capture: 0.36, gain: 1, chain: 2 },
+  sculpt: { radius: 2.2, strength: 9.4, capture: 0.3, gain: 1, chain: 0 },
+};
 
 const state = {
   status: "ready",
   mode: "gather",
   score: 0,
+  combo: 0,
+  comboTimer: 0,
   milestone: 0,
   timeLeft: RUN_SECONDS,
   rank: "-",
@@ -43,6 +54,7 @@ const state = {
   fieldCharge: 0,
   finished: false,
   toastTimer: 0,
+  lastCollectSound: 0,
 };
 
 const pointer = new THREE.Vector2(0, 0);
@@ -52,6 +64,7 @@ const raycaster = new THREE.Raycaster();
 const interactionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 const clock = new THREE.Clock();
 const dummy = new THREE.Object3D();
+const pulseGeometry = new THREE.TorusGeometry(0.34, 0.012, 8, 96);
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
@@ -77,6 +90,7 @@ const sculpture = new THREE.Group();
 const rings = [];
 const beadMeshes = [];
 const particles = [];
+const effects = [];
 scene.add(world);
 world.add(sculpture);
 
@@ -387,6 +401,7 @@ function animate() {
 
   if (state.status === "playing") {
     state.timeLeft = Math.max(0, state.timeLeft - dt);
+    updateCombo(dt);
     syncClock();
 
     if (state.timeLeft <= 0) {
@@ -404,13 +419,15 @@ function animate() {
 
   updateParticles(dt, t);
   updateSculpture(dt, t);
+  updateEffects(dt);
   renderer.render(scene, camera);
 }
 
 function updateParticles(dt, t) {
   const active = isRunActive() && (state.pointerActive || state.keyboardActive || state.fieldCharge > 0);
-  const radius = state.mode === "sculpt" ? 2.35 : state.mode === "orbit" ? 1.95 : 2.1;
-  const strength = state.mode === "sculpt" ? 9.2 : state.mode === "orbit" ? 7.8 : 10.5;
+  const rule = modeRules[state.mode];
+  const radius = rule.radius;
+  const strength = rule.strength;
 
   particles.forEach((particle, index) => {
     const p = particle.position;
@@ -440,7 +457,7 @@ function updateParticles(dt, t) {
           v.addScaledVector(normal, strength * falloff * dt);
         }
 
-        const captureRadius = state.mode === "gather" ? radius * 0.52 : radius * 0.38;
+        const captureRadius = radius * rule.capture;
         if (distance < captureRadius) {
           collectParticle(index);
         }
@@ -479,17 +496,177 @@ function containParticle(position, velocity) {
   }
 }
 
+function updateCombo(dt) {
+  if (state.combo <= 0) {
+    return;
+  }
+
+  state.comboTimer -= dt;
+  if (state.comboTimer > 0) {
+    return;
+  }
+
+  state.combo = Math.max(0, state.combo - 1);
+  state.comboTimer = state.combo > 0 ? 0.18 : 0;
+  syncHud();
+}
+
+function calculateSparkGain() {
+  const rule = modeRules[state.mode];
+  let gain = rule.gain;
+
+  if (state.mode === "orbit") {
+    if (state.combo >= 16) {
+      gain += 1;
+    }
+  }
+
+  if (state.mode === "sculpt") {
+    const comboSpend = Math.min(state.combo, 12);
+    const comboBonus = Math.floor(comboSpend / 6);
+    gain += comboBonus;
+    state.combo = Math.max(0, state.combo - comboSpend);
+    state.comboTimer = state.combo > 0 ? COMBO_DECAY_SECONDS * 0.55 : 0;
+  } else {
+    state.combo = Math.min(MAX_COMBO, state.combo + rule.chain);
+    state.comboTimer = COMBO_DECAY_SECONDS;
+  }
+
+  return gain;
+}
+
+function spawnPulse(position, color, scale = 1, life = 0.7) {
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.82,
+  });
+  const pulse = new THREE.Mesh(pulseGeometry, material);
+  pulse.position.copy(position);
+  pulse.rotation.x = Math.PI / 2;
+  pulse.userData = {
+    age: 0,
+    life,
+    scale,
+  };
+  world.add(pulse);
+  effects.push(pulse);
+}
+
+function updateEffects(dt) {
+  for (let index = effects.length - 1; index >= 0; index -= 1) {
+    const effect = effects[index];
+    effect.userData.age += dt;
+    const progress = effect.userData.age / effect.userData.life;
+    const scale = effect.userData.scale * (1 + progress * 2.8);
+    effect.scale.setScalar(scale);
+    effect.material.opacity = Math.max(0, 0.82 * (1 - progress));
+
+    if (progress >= 1) {
+      world.remove(effect);
+      effect.material.dispose();
+      effects.splice(index, 1);
+    }
+  }
+}
+
+function unlockAudio() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    return;
+  }
+
+  if (!audioContext) {
+    audioContext = new AudioContextClass();
+  }
+
+  if (audioContext.state === "suspended") {
+    audioContext.resume();
+  }
+}
+
+function playTone(frequency, duration = 0.08, type = "sine", volume = 0.035, delay = 0) {
+  if (!audioContext) {
+    return;
+  }
+
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const start = audioContext.currentTime + delay;
+  const end = start + duration;
+
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, start);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(volume, start + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, end);
+  oscillator.connect(gain);
+  gain.connect(audioContext.destination);
+  oscillator.start(start);
+  oscillator.stop(end + 0.02);
+}
+
+function playSound(name, intensity = 1) {
+  if (!audioContext) {
+    return;
+  }
+
+  if (name === "collect") {
+    playTone(420 + state.combo * 12 + intensity * 35, 0.055, "sine", 0.018 + intensity * 0.004);
+    return;
+  }
+
+  if (name === "mode") {
+    playTone(state.mode === "orbit" ? 330 : state.mode === "sculpt" ? 260 : 390, 0.09, "triangle", 0.032);
+    return;
+  }
+
+  if (name === "start") {
+    playTone(240, 0.07, "triangle", 0.026);
+    playTone(360, 0.08, "triangle", 0.028, 0.07);
+    return;
+  }
+
+  if (name === "milestone") {
+    playTone(480, 0.07, "triangle", 0.03);
+    playTone(640, 0.07, "triangle", 0.03, 0.07);
+    playTone(820, 0.1, "triangle", 0.03, 0.14);
+    return;
+  }
+
+  if (name === "finish") {
+    [360, 480, 640, 960].forEach((frequency, index) => {
+      playTone(frequency, 0.13, "triangle", 0.034, index * 0.08);
+    });
+    return;
+  }
+
+  if (name === "timeup") {
+    playTone(180, 0.18, "sawtooth", 0.024);
+    playTone(130, 0.22, "sawtooth", 0.018, 0.12);
+  }
+}
+
 function collectParticle(index) {
   if (!isRunActive()) {
     return;
   }
 
   const particle = particles[index];
-  const gain = state.mode === "sculpt" ? 2 : 1;
+  const gain = calculateSparkGain();
   state.score += gain;
 
-  if (state.score % 2 === 0 || state.mode === "sculpt") {
+  for (let bead = 0; bead < Math.min(gain, 4); bead += 1) {
     addBead(particle.color);
+  }
+
+  if (gain > 1 || state.combo % 8 === 0) {
+    spawnPulse(particle.position, particle.color, gain > 2 ? 1.35 : 1, 0.58);
+  }
+
+  if (clock.elapsedTime - state.lastCollectSound > 0.045) {
+    playSound("collect", Math.min(gain, 3));
+    state.lastCollectSound = clock.elapsedTime;
   }
 
   const replacement = makeParticle(index);
@@ -529,6 +706,8 @@ function updateMilestone() {
   }
 
   rings[state.milestone].userData.targetOpacity = 0.9;
+  spawnPulse(new THREE.Vector3(0, 0.15, 0), rings[state.milestone].material.color, 1.25 + state.milestone * 0.28, 0.9);
+  playSound("milestone");
   showToast(next.label);
   state.milestone += 1;
 
@@ -568,7 +747,10 @@ function isRunActive() {
 }
 
 function startRun() {
+  unlockAudio();
   resetGame({ silent: true, status: "playing" });
+  spawnPulse(new THREE.Vector3(0, 0.15, 0), palette.cyan, 1.4, 0.8);
+  playSound("start");
   showToast("Run start");
 }
 
@@ -585,8 +767,12 @@ function endRun(didWin) {
   state.rank = calculateRank(didWin);
 
   if (didWin) {
+    spawnPulse(new THREE.Vector3(0, 0.15, 0), palette.amber, 2.25, 1.3);
+    playSound("finish");
     showToast("Gen final work complete");
   } else {
+    spawnPulse(new THREE.Vector3(0, 0.15, 0), palette.coral, 1.4, 0.9);
+    playSound("timeup");
     showToast("Time up");
   }
 
@@ -681,6 +867,7 @@ function syncRunPanel() {
 
 function syncHud() {
   sparkCountEl.textContent = state.score.toString();
+  chainValueEl.textContent = state.combo.toString();
   syncClock();
   const phaseIndex = Math.min(state.milestone, phaseNames.length - 1);
   phaseNameEl.textContent = phaseNames[phaseIndex];
@@ -706,12 +893,24 @@ function showToast(message) {
 }
 
 function setMode(mode) {
+  if (state.mode === mode) {
+    return;
+  }
+
+  unlockAudio();
   state.mode = mode;
+  playSound("mode");
+  if (state.status !== "ready") {
+    const color = mode === "gather" ? palette.cyan : mode === "orbit" ? palette.amber : palette.coral;
+    spawnPulse(smoothTarget, color, 0.9, 0.46);
+  }
   syncHud();
 }
 
 function resetGame(options = {}) {
   state.score = 0;
+  state.combo = 0;
+  state.comboTimer = 0;
   state.milestone = 0;
   state.timeLeft = RUN_SECONDS;
   state.rank = "-";
@@ -729,6 +928,11 @@ function resetGame(options = {}) {
     bead.geometry.dispose();
     bead.material.dispose();
     sculpture.remove(bead);
+  });
+
+  effects.splice(0).forEach((effect) => {
+    effect.material.dispose();
+    world.remove(effect);
   });
 
   particles.forEach((particle, index) => {
