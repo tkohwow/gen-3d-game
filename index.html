@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Gen 2gen #3 inspired 3D particle milestone game prototype."
+    />
+    <title>Gen Particle Milestone Lab</title>
+  </head>
+  <body>
+    <canvas id="game" aria-label="Gen Particle Milestone Lab 3D scene"></canvas>
+
+    <main class="ui-shell" aria-label="Game HUD">
+      <section class="topbar" aria-label="Project status">
+        <div class="identity">
+          <span class="eyebrow">Gen 2gen #3</span>
+          <h1>Particle Milestone Lab</h1>
+        </div>
+
+        <div class="meters" aria-label="Game metrics">
+          <div class="meter">
+            <span>Spark</span>
+            <strong id="sparkCount">0</strong>
+          </div>
+          <div class="meter">
+            <span>Time</span>
+            <strong id="timeLeft">60.0</strong>
+          </div>
+          <div class="meter">
+            <span>Phase</span>
+            <strong id="phaseName">2D Seed</strong>
+          </div>
+          <div class="meter wide">
+            <span>Coherence</span>
+            <div class="bar" aria-hidden="true">
+              <i id="coherenceBar"></i>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="milestone-panel" aria-label="Milestones">
+        <ol id="milestoneList">
+          <li data-step="0"><span>01</span>パーティクル操作</li>
+          <li data-step="1"><span>02</span>2Dから3Dへ</li>
+          <li data-step="2"><span>03</span>リアリティキット感</li>
+          <li data-step="3"><span>04</span>最終作品</li>
+        </ol>
+      </section>
+
+      <nav class="toolbelt" aria-label="Particle tools">
+        <button class="mode-button active" type="button" data-mode="gather" title="Gather" aria-label="Gather mode">
+          吸
+        </button>
+        <button class="mode-button" type="button" data-mode="orbit" title="Orbit" aria-label="Orbit mode">
+          回
+        </button>
+        <button class="mode-button" type="button" data-mode="sculpt" title="Sculpt" aria-label="Sculpt mode">
+          作
+        </button>
+        <button id="resetButton" type="button" title="Reset" aria-label="Reset game">
+          ↺
+        </button>
+      </nav>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+      <section id="runPanel" class="run-panel" aria-label="Run result">
+        <div class="run-card">
+          <span id="runKicker">60s Run</span>
+          <strong id="runTitle">Ready</strong>
+          <dl>
+            <div>
+              <dt>Rank</dt>
+              <dd id="rankValue">-</dd>
+            </div>
+            <div>
+              <dt>Best</dt>
+              <dd id="bestValue">-</dd>
+            </div>
+          </dl>
+          <button id="startButton" type="button">Start Run</button>
+          <button id="retryButton" type="button" hidden>Retry</button>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
