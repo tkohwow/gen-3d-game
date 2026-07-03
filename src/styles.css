@@ -109,11 +109,11 @@ h1 {
 .meters {
   display: grid;
   grid-template-columns:
-    minmax(72px, 0.55fr) minmax(72px, 0.55fr) minmax(72px, 0.55fr) minmax(126px, 0.9fr)
-    minmax(170px, 1.35fr);
+    minmax(68px, 0.5fr) minmax(68px, 0.5fr) minmax(112px, 0.8fr) minmax(72px, 0.55fr)
+    minmax(126px, 0.9fr) minmax(160px, 1.25fr);
   align-items: center;
   gap: 10px;
-  min-width: min(62vw, 710px);
+  min-width: min(68vw, 820px);
   padding: 10px;
 }
 
@@ -139,6 +139,11 @@ h1 {
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.flow-meter strong {
+  color: var(--amber);
+  font-size: 0.96rem;
 }
 
 .bar {
@@ -391,6 +396,10 @@ h1 {
 
   .meter strong {
     font-size: 0.9rem;
+  }
+
+  .flow-meter strong {
+    font-size: 0.86rem;
   }
 
   .milestone-panel {

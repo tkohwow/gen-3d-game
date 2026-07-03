@@ -4,6 +4,7 @@ import "./styles.css";
 const canvas = document.querySelector("#game");
 const sparkCountEl = document.querySelector("#sparkCount");
 const chainValueEl = document.querySelector("#chainValue");
+const flowValueEl = document.querySelector("#flowValue");
 const timeLeftEl = document.querySelector("#timeLeft");
 const phaseNameEl = document.querySelector("#phaseName");
 const coherenceBarEl = document.querySelector("#coherenceBar");
@@ -32,7 +33,12 @@ const FINISH_SCORE = milestones[milestones.length - 1].threshold;
 const BEST_STORAGE_KEY = "gen-particle-best-run-v2";
 const COMBO_DECAY_SECONDS = 2.4;
 const MAX_COMBO = 24;
+const MAX_FLOW = 9;
+const CATALYST_INTERVAL = 6.4;
+const CATALYST_LIFETIME = 5.2;
 const rankWeight = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 };
+const flowSequence = ["gather", "orbit", "sculpt"];
+const modeGlyphs = { gather: "吸", orbit: "回", sculpt: "作" };
 const modeRules = {
   gather: { radius: 2.2, strength: 10.8, capture: 0.56, gain: 1, chain: 1 },
   orbit: { radius: 1.68, strength: 8.6, capture: 0.36, gain: 1, chain: 2 },
@@ -45,6 +51,9 @@ const state = {
   score: 0,
   combo: 0,
   comboTimer: 0,
+  flow: 0,
+  flowIndex: 0,
+  lastFlowMode: null,
   milestone: 0,
   timeLeft: RUN_SECONDS,
   rank: "-",
@@ -54,6 +63,8 @@ const state = {
   fieldCharge: 0,
   finished: false,
   toastTimer: 0,
+  catalystTimer: 3.4,
+  catalystActive: false,
   lastCollectSound: 0,
 };
 
@@ -108,6 +119,7 @@ setupStage();
 setupBriefBoard();
 setupSculpture();
 const particleMesh = setupParticles();
+const catalyst = setupCatalyst();
 const cursor = setupCursor();
 syncHud();
 syncRunPanel();
@@ -371,6 +383,48 @@ function makeParticle(index) {
   };
 }
 
+function setupCatalyst() {
+  const group = new THREE.Group();
+  group.visible = false;
+  world.add(group);
+
+  const core = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.19, 1),
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0x49d8cb,
+      roughness: 0.18,
+      metalness: 0.35,
+    }),
+  );
+  group.add(core);
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.34, 0.012, 8, 72),
+    new THREE.MeshBasicMaterial({
+      color: 0xffc857,
+      transparent: true,
+      opacity: 0.9,
+    }),
+  );
+  ring.rotation.x = Math.PI / 2;
+  group.add(ring);
+
+  const light = new THREE.PointLight(0xffffff, 4, 3, 2);
+  group.add(light);
+
+  group.userData = {
+    core,
+    ring,
+    light,
+    mode: "gather",
+    phase: 0,
+    velocity: new THREE.Vector3(),
+  };
+
+  return group;
+}
+
 function setupCursor() {
   const group = new THREE.Group();
   world.add(group);
@@ -417,6 +471,7 @@ function animate() {
   cursor.scale.setScalar((fieldActive ? 1.18 : 0.86) + Math.sin(t * 8) * 0.025);
   cursor.rotation.z = t * 1.8;
 
+  updateCatalyst(dt, t, fieldActive);
   updateParticles(dt, t);
   updateSculpture(dt, t);
   updateEffects(dt);
@@ -511,9 +566,48 @@ function updateCombo(dt) {
   syncHud();
 }
 
+function updateFlow() {
+  const expectedMode = flowSequence[state.flowIndex];
+
+  if (state.mode === state.lastFlowMode) {
+    return 0;
+  }
+
+  state.lastFlowMode = state.mode;
+
+  if (state.mode === expectedMode) {
+    state.flow = Math.min(MAX_FLOW, state.flow + 1);
+    state.flowIndex = (state.flowIndex + 1) % flowSequence.length;
+    return state.flow % flowSequence.length === 0 ? 1 : 0;
+  }
+
+  state.flow = Math.max(0, state.flow - 1);
+  return 0;
+}
+
+function flowLabel() {
+  const sequence = flowSequence
+    .map((mode, index) => (index === state.flowIndex ? `[${modeGlyphs[mode]}]` : modeGlyphs[mode]))
+    .join(" ");
+  return `${state.flow} ${sequence}`;
+}
+
+function modeColor(mode) {
+  if (mode === "orbit") {
+    return palette.amber;
+  }
+
+  if (mode === "sculpt") {
+    return palette.coral;
+  }
+
+  return palette.cyan;
+}
+
 function calculateSparkGain() {
   const rule = modeRules[state.mode];
   let gain = rule.gain;
+  const flowBonus = updateFlow();
 
   if (state.mode === "orbit") {
     if (state.combo >= 16) {
@@ -532,7 +626,101 @@ function calculateSparkGain() {
     state.comboTimer = COMBO_DECAY_SECONDS;
   }
 
-  return gain;
+  return { gain: gain + flowBonus, flowBonus };
+}
+
+function spawnCatalyst() {
+  const mode = flowSequence[state.flowIndex];
+  const color = modeColor(mode);
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 1.35 + Math.random() * 2.4;
+
+  state.catalystActive = true;
+  state.catalystTimer = CATALYST_LIFETIME;
+  catalyst.visible = true;
+  catalyst.position.set(Math.cos(angle) * radius, -0.1 + Math.random() * 2.35, Math.sin(angle) * radius * 0.52);
+  catalyst.userData.mode = mode;
+  catalyst.userData.phase = Math.random() * Math.PI * 2;
+  catalyst.userData.velocity.set((Math.random() - 0.5) * 0.22, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.18);
+  catalyst.userData.core.material.color.copy(color);
+  catalyst.userData.core.material.emissive.copy(color).multiplyScalar(0.45);
+  catalyst.userData.ring.material.color.copy(color);
+  catalyst.userData.light.color.copy(color);
+  catalyst.userData.light.intensity = 4.4;
+  spawnPulse(catalyst.position, color, 0.8, 0.54);
+}
+
+function despawnCatalyst(delay = CATALYST_INTERVAL) {
+  state.catalystActive = false;
+  state.catalystTimer = delay;
+  catalyst.visible = false;
+}
+
+function updateCatalyst(dt, t, fieldActive) {
+  if (!isRunActive()) {
+    catalyst.visible = false;
+    return;
+  }
+
+  if (!state.catalystActive) {
+    state.catalystTimer -= dt;
+    if (state.catalystTimer <= 0) {
+      spawnCatalyst();
+    }
+    return;
+  }
+
+  state.catalystTimer -= dt;
+  catalyst.rotation.y += dt * 2.2;
+  catalyst.rotation.z -= dt * 1.4;
+  catalyst.position.addScaledVector(catalyst.userData.velocity, dt * 2.2);
+  catalyst.position.y += Math.sin(t * 2.1 + catalyst.userData.phase) * dt * 0.16;
+  containParticle(catalyst.position, catalyst.userData.velocity);
+
+  const pulse = 1 + Math.sin(t * 7.5) * 0.12;
+  catalyst.scale.setScalar(pulse);
+  catalyst.userData.ring.rotation.z = -t * 3.2;
+  catalyst.userData.light.intensity = 3.4 + Math.sin(t * 8) * 0.75;
+
+  if (state.catalystTimer <= 0) {
+    despawnCatalyst(4.8 + Math.random() * 2.6);
+    return;
+  }
+
+  const captureRadius = state.mode === catalyst.userData.mode ? 0.78 : 0.54;
+  if (fieldActive && catalyst.position.distanceTo(smoothTarget) < captureRadius) {
+    collectCatalyst();
+  }
+}
+
+function collectCatalyst() {
+  const expectedHit = state.mode === catalyst.userData.mode;
+  const color = modeColor(catalyst.userData.mode);
+  const reward = expectedHit ? 5 : 2;
+
+  state.score += reward;
+  state.combo = Math.min(MAX_COMBO, state.combo + (expectedHit ? 7 : 3));
+  state.comboTimer = COMBO_DECAY_SECONDS;
+  state.flow = Math.min(MAX_FLOW, state.flow + (expectedHit ? 2 : 1));
+
+  if (expectedHit) {
+    state.flowIndex = (flowSequence.indexOf(catalyst.userData.mode) + 1) % flowSequence.length;
+    state.lastFlowMode = catalyst.userData.mode;
+    state.timeLeft = Math.min(RUN_SECONDS, state.timeLeft + 2.5);
+  } else {
+    state.timeLeft = Math.min(RUN_SECONDS, state.timeLeft + 0.8);
+  }
+
+  for (let bead = 0; bead < Math.min(4, reward); bead += 1) {
+    addBead(color);
+  }
+
+  spawnPulse(catalyst.position, color, expectedHit ? 1.7 : 1.15, 0.78);
+  playSound("catalyst", expectedHit ? 2 : 1);
+  showToast(expectedHit ? "Flow catalyst" : "Catalyst");
+  despawnCatalyst(5.6 + Math.random() * 2.4);
+  updateMilestone();
+  syncHud();
 }
 
 function spawnPulse(position, color, scale = 1, life = 0.7) {
@@ -616,6 +804,18 @@ function playSound(name, intensity = 1) {
     return;
   }
 
+  if (name === "flow") {
+    playTone(520, 0.055, "triangle", 0.022);
+    playTone(700, 0.07, "triangle", 0.024, 0.045);
+    return;
+  }
+
+  if (name === "catalyst") {
+    playTone(620, 0.075, "triangle", 0.03);
+    playTone(intensity > 1 ? 930 : 760, 0.1, "triangle", 0.028, 0.06);
+    return;
+  }
+
   if (name === "mode") {
     playTone(state.mode === "orbit" ? 330 : state.mode === "sculpt" ? 260 : 390, 0.09, "triangle", 0.032);
     return;
@@ -653,15 +853,19 @@ function collectParticle(index) {
   }
 
   const particle = particles[index];
-  const gain = calculateSparkGain();
+  const { gain, flowBonus } = calculateSparkGain();
   state.score += gain;
 
   for (let bead = 0; bead < Math.min(gain, 4); bead += 1) {
     addBead(particle.color);
   }
 
-  if (gain > 1 || state.combo % 8 === 0) {
+  if (gain > 1 || flowBonus > 0 || state.combo % 8 === 0) {
     spawnPulse(particle.position, particle.color, gain > 2 ? 1.35 : 1, 0.58);
+  }
+
+  if (flowBonus > 0) {
+    playSound("flow");
   }
 
   if (clock.elapsedTime - state.lastCollectSound > 0.045) {
@@ -868,6 +1072,7 @@ function syncRunPanel() {
 function syncHud() {
   sparkCountEl.textContent = state.score.toString();
   chainValueEl.textContent = state.combo.toString();
+  flowValueEl.textContent = flowLabel();
   syncClock();
   const phaseIndex = Math.min(state.milestone, phaseNames.length - 1);
   phaseNameEl.textContent = phaseNames[phaseIndex];
@@ -901,8 +1106,7 @@ function setMode(mode) {
   state.mode = mode;
   playSound("mode");
   if (state.status !== "ready") {
-    const color = mode === "gather" ? palette.cyan : mode === "orbit" ? palette.amber : palette.coral;
-    spawnPulse(smoothTarget, color, 0.9, 0.46);
+    spawnPulse(smoothTarget, modeColor(mode), 0.9, 0.46);
   }
   syncHud();
 }
@@ -911,6 +1115,9 @@ function resetGame(options = {}) {
   state.score = 0;
   state.combo = 0;
   state.comboTimer = 0;
+  state.flow = 0;
+  state.flowIndex = 0;
+  state.lastFlowMode = null;
   state.milestone = 0;
   state.timeLeft = RUN_SECONDS;
   state.rank = "-";
@@ -919,6 +1126,10 @@ function resetGame(options = {}) {
   state.pointerActive = false;
   state.keyboardActive = false;
   state.fieldCharge = 0;
+  state.catalystTimer = 3.4;
+  state.catalystActive = false;
+  state.lastCollectSound = 0;
+  catalyst.visible = false;
 
   rings.forEach((ring) => {
     ring.userData.targetOpacity = 0;
